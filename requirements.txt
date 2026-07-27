@@ -8,4 +8,5 @@ fastapi
 uvicorn
 bcrypt
 pyjwt
+slowapi
 python-jose[cryptography]
