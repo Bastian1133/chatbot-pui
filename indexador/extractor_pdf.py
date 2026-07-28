@@ -3,8 +3,7 @@ from pypdf import PdfReader
 import re
 import textwrap
 
-class Extractor:
-    
+class Extractor:    
     def extraer_desde_carpeta(self, ruta_carpeta: str) -> dict:
         carpeta = Path(ruta_carpeta)
         resultados = {}
