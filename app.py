@@ -53,6 +53,14 @@ def consultar(request: ConsultaRequest):
     texto_generado = gemini_chat.consultar_llm(request.pregunta, contexto)
     return ConsultaResponse(respuesta=texto_generado)
 
+@app.get("/ping")
+def ping():
+    try:
+        retriever.supabase.table("chunks_padres").select("id_chunk_padre").limit(1).execute()
+        return {"status": "ok", "db": "alive"}
+    except Exception as e:
+        return {"status": "ok", "db": "error", "detail": str(e)}
+
 @app.post("/login", response_model=LoginResponse)
 @limiter.limit("5/5minutes")
 def login(request: Request, datos: LoginRequest):
