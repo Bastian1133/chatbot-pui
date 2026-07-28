@@ -1,65 +1,48 @@
-import textwrap
 import re
 
+
 class Chunker:
-    
-    def __init__(self, chunk_size_maximo=500):
-        self.chunk_size_maximo = chunk_size_maximo
-    
-    def _dividir_texto(self, texto: str) -> list:
+
+    def _dividir_en_oraciones(self, texto_bloque: str) -> list:
+        """Divide un bloque (ya segmentado temáticamente) en oraciones,
+        que serán los hijos de ese bloque."""
         fragmentos = []
-    
-        # Separar por párrafos (doble salto de línea)
-        bloques = texto.split("\n\n")
-        
-        for bloque in bloques:
-            lineas = [l.strip() for l in bloque.split("\n") if l.strip()]
-            if not lineas:
-                continue
-            
-            # Fusionar la primera línea (encabezado/título) con la segunda,
-            # para que no quede como chunk aislado y genérico
-            if len(lineas) > 1:
-                lineas[1] = f"{lineas[0]} {lineas[1]}"
-                lineas = lineas[1:]
-            
-            for linea in lineas:
-                oraciones = re.split(r'(?<=[.!])\s+', linea)
-                for oracion in oraciones:
-                    oracion = oracion.strip()
-                    if oracion:
-                        fragmentos.append(oracion)
-        
+        lineas = [l.strip() for l in texto_bloque.split("\n") if l.strip()]
+
+        for linea in lineas:
+            oraciones = re.split(r'(?<=[.!?])\s+', linea)
+            for oracion in oraciones:
+                oracion = oracion.strip()
+                if oracion:
+                    fragmentos.append(oracion)
+
         return fragmentos
-    
-    def generar_chunks(self, texto: str, fuente: str) -> dict:
-        texto_limpio = textwrap.dedent(texto).strip()
-        
-        # Chunk padre: el bloque completo
-        padre = {
-            "contexto_completo": texto_limpio,
-            "fuente": fuente
-        }
-        
-        # Chunks hijos: cada línea/párrafo enriquecido con el título
-        fragmentos = self._dividir_texto(texto_limpio)
-        hijos = []
-        for fragmento in fragmentos:
-            hijos.append({
-                "texto_embedding": fragmento,
-            })
-        
-        return {
-            "padre": padre,
-            "hijos": hijos
-        }
-    
-    def generar_desde_diccionario(self, diccionario: dict) -> list:
+
+    def generar_chunks_desde_bloques(self, bloques: list, fuente: str) -> list:
+        """
+        Recibe los bloques YA segmentados temáticamente (por el Segmentador
+        con Gemini) y construye la estructura padre-hijo.
+
+        A diferencia del esquema anterior (un padre por PDF completo),
+        aquí cada bloque temático es su propio padre, con sus propios
+        hijos (oraciones/líneas de ESE bloque, no del documento entero).
+        Esto evita que el contexto que recibe el modelo mezcle temas
+        no relacionados, y evita que listas o procedimientos de varios
+        pasos pierdan elementos por baja similitud individual.
+        """
         resultado = []
-        for nombre_pdf, texto in diccionario.items():
-            print(f"Chunkeando: {nombre_pdf}")
-            chunks = self.generar_chunks(texto, nombre_pdf)
-            resultado.append(chunks)
-            print(f"  Padre: 1 bloque")
-            print(f"  Hijos: {len(chunks['hijos'])} fragmentos")
+        for bloque in bloques:
+            padre = {
+                "contexto_completo": bloque.strip(),
+                "fuente": fuente
+            }
+
+            fragmentos = self._dividir_en_oraciones(bloque)
+            hijos = [{"texto_embedding": frag} for frag in fragmentos]
+
+            resultado.append({
+                "padre": padre,
+                "hijos": hijos
+            })
+
         return resultado
