@@ -49,5 +49,18 @@ class Extractor:
     def extraer_de_archivo(self, ruta_pdf: str) -> str:
         """Extrae y limpia el texto de un solo PDF."""
         return self._Extractor__extraer_texto(ruta_pdf)
+
+    def extraer_de_buffer(self, contenido: bytes) -> str:
+        """Extrae texto de un PDF recibido como bytes en memoria.
+        Usado cuando el archivo llega via UploadFile (endpoint web),
+        en lugar de desde una ruta local."""
+        import io
+        reader = PdfReader(io.BytesIO(contenido))
+        texto_completo = ""
+        for pagina in reader.pages:
+            texto = pagina.extract_text()
+            if texto:
+                texto_completo += texto + "\n"
+        return self.__limpiar_texto(texto_completo)
     
     
