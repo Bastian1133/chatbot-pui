@@ -12,6 +12,7 @@ from fastapi import UploadFile, File, BackgroundTasks, HTTPException
 from database.documentos_repo import DocumentosRepo
 from database.trabajos_repo import TrabajosRepo
 from pipeline import pipeline_alta, pipeline_actualizacion
+from auth import autenticar_admin, obtener_admin_actual, cambiar_password
 
 app = FastAPI(
     title="Chatbot Servicio Social UPIICSA",
@@ -58,11 +59,9 @@ class DocumentoResponse(BaseModel):
     estado: str
     version: int
  
- 
 class AltaResponse(BaseModel):
     documento_id: str
     job_id: str
- 
  
 class EstadoJobResponse(BaseModel):
     job_id: str
@@ -72,6 +71,10 @@ class EstadoJobResponse(BaseModel):
     progreso: str | None = None
     mensaje_error: str | None = None
 
+class CambiarPasswordRequest(BaseModel):
+    password_actual: str
+    password_nueva: str
+    password_nueva_confirmacion: str
 
 # ---------------------------- Endpoints ----------------------------
 @app.post("/consulta", response_model=ConsultaResponse)
@@ -226,3 +229,25 @@ def estado_job(job_id: str, admin: str = Depends(obtener_admin_actual)):
         progreso=job.get("progreso"),
         mensaje_error=job.get("mensaje_error")
     )
+
+@app.put("/admin/password", status_code=200)
+def actualizar_password(request: CambiarPasswordRequest,admin: str = Depends(obtener_admin_actual)):
+    """
+    Cambia la contraseña del administrador autenticado.
+    Requiere la contraseña actual para confirmar identidad,
+    más la nueva contraseña en dos campos para evitar errores de tipeo.
+    """
+    if request.password_nueva != request.password_nueva_confirmacion:
+        raise HTTPException(
+            status_code=400,
+            detail="La nueva contraseña y su confirmación no coinciden"
+        )
+
+    if len(request.password_nueva) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="La nueva contraseña debe tener al menos 8 caracteres"
+        )
+
+    cambiar_password(admin, request.password_actual, request.password_nueva)
+    return {"mensaje": "Contraseña actualizada correctamente"}
