@@ -78,3 +78,39 @@ def obtener_admin_actual(credenciales: HTTPAuthorizationCredentials = Depends(se
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido"
         )
+
+def cambiar_password(usuario: str, password_actual: str, password_nueva: str) -> None:
+    """Verifica la contraseña actual y actualiza con la nueva hasheada."""
+    supabase = get_supabase_client()
+
+    # Obtener el hash actual del admin
+    response = supabase.table("administradores") \
+        .select("password_hash") \
+        .eq("usuario", usuario) \
+        .execute()
+
+    if not response.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Administrador no encontrado"
+        )
+
+    hash_actual = response.data[0]["password_hash"]
+
+    # Verificar que la contraseña actual es correcta
+    if not verificar_password(password_actual, hash_actual):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="La contraseña actual es incorrecta"
+        )
+
+    # Hashear y guardar la nueva contraseña
+    nuevo_hash = bcrypt.hashpw(
+        password_nueva.encode("utf-8"),
+        bcrypt.gensalt()
+    ).decode("utf-8")
+
+    supabase.table("administradores") \
+        .update({"password_hash": nuevo_hash}) \
+        .eq("usuario", usuario) \
+        .execute()

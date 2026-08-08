@@ -8,5 +8,6 @@ fastapi
 uvicorn
 bcrypt
 pyjwt
+python-multipart
 slowapi
 python-jose[cryptography]
