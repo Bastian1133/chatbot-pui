@@ -17,7 +17,8 @@ python -m uvicorn app:app --reload
 [![Supabase](https://img.shields.io/badge/Supabase-pgvector-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com/)
 [![Gemini](https://img.shields.io/badge/Google-Gemini-4285F4?logo=googlegemini&logoColor=white)](https://ai.google.dev/)
 [![Google Apps Script](https://img.shields.io/badge/Frontend-Google%20Apps%20Script-4285F4?logo=google&logoColor=white)](https://developers.google.com/apps-script)
-[![Status](https://img.shields.io/badge/status-en%20desarrollo-yellow)]()
+[![Deployed on Render](https://img.shields.io/badge/Deployed%20on-Render-46E3B7?logo=render&logoColor=white)](https://chatbot-pui-api.onrender.com)
+[![Status](https://img.shields.io/badge/status-en%20producción-brightgreen)]()
 
 </div>
 
@@ -30,8 +31,10 @@ python -m uvicorn app:app --reload
 - [Arquitectura](#-arquitectura)
 - [Stack tecnológico](#-stack-tecnológico)
 - [Estructura del proyecto](#-estructura-del-proyecto)
+- [Esquema de base de datos](#-esquema-de-base-de-datos)
 - [Endpoints de la API](#-endpoints-de-la-api)
 - [Autenticación de administradores](#-autenticación-de-administradores)
+- [Pipeline de indexación](#-pipeline-de-indexación)
 - [Puesta en marcha local](#-puesta-en-marcha-local)
 - [Variables de entorno](#-variables-de-entorno)
 - [Despliegue](#-despliegue)
@@ -53,7 +56,7 @@ El sistema no entrena ningún modelo de inteligencia artificial desde cero. En s
 - Informar sobre requisitos, plazos y procedimientos.
 - Operar de forma continua (24/7) sin intervención humana.
 - Fundamentar todas las respuestas exclusivamente en documentación oficial.
-- Permitir a un administrador actualizar la base de conocimiento subiendo nuevos PDFs, sin tocar código.
+- Permitir a un administrador actualizar la base de conocimiento subiendo nuevos PDFs desde el panel web, sin tocar código.
 
 **Fuera del alcance:**
 - Realizar trámites de forma automatizada (el chatbot informa, no gestiona).
@@ -80,50 +83,57 @@ Esto evita dos problemas clásicos de los LLM: **alucinaciones** (inventar respu
 
 El sistema se divide en dos subsistemas independientes:
 
-- **Indexador** — proceso administrativo que carga o actualiza la base de conocimiento (PDFs → texto → chunks → embeddings → Supabase). No interviene en cada consulta del usuario.
-- **Flujo de consulta** — se ejecuta cada vez que alguien hace una pregunta al chatbot.
+- **Indexador** — proceso que carga o actualiza la base de conocimiento (PDFs → extracción → segmentación temática con Gemini → chunks → embeddings → Supabase). Se ejecuta vía panel de administración o script local.
+- **Flujo de consulta** — se ejecuta en tiempo real cada vez que un usuario hace una pregunta al chatbot.
 
 ```mermaid
 flowchart TD
-    subgraph Cliente["Cliente (Google Apps Script)"]
+    subgraph GAS["Cliente (Google Apps Script)"]
         A[Vista chatbot]
         B[Vista login admin]
+        C[Panel de administración]
     end
 
-    subgraph API["Backend — FastAPI"]
-        C[POST /consulta]
-        D[POST /login]
-        E[POST /indexar/iniciar]
-        F[GET /indexar/estado/:job_id]
+    subgraph API["Backend — FastAPI (Render)"]
+        D[POST /consulta]
+        E[POST /login]
+        F[PUT /admin/password]
+        G[GET /documentos]
+        H[POST /documentos]
+        I[PUT /documentos/:id]
+        J[DELETE /documentos/:id]
+        K[GET /indexar/estado/:job_id]
+        L[GET /ping]
     end
 
     subgraph RAG["Motor RAG"]
-        G[Retriever]
-        H[Embedder — Gemini]
-        I[GeminiChat]
+        M[Retriever]
+        N[Embedder — Gemini]
+        O[GeminiChat]
+        P[Segmentador — Gemini]
     end
 
     subgraph DB["Supabase — pgvector"]
-        J[(chunks_padres)]
-        K[(chunks_hijos)]
-        L[(administradores)]
+        Q[(chunks_padres)]
+        R[(chunks_hijos)]
+        S[(administradores)]
+        T[(documentos)]
+        U[(trabajos_indexacion)]
     end
 
-    A -->|pregunta| C
-    C --> G
-    G --> H
-    H -->|vector| J
-    J --> K
-    K -->|contexto| I
-    I -->|respuesta| C
-    C -->|JSON| A
+    A -->|pregunta| D
+    D --> M --> N -->|vector| Q --> R -->|contexto| O --> D -->|respuesta| A
 
-    B -->|usuario + password| D
-    D -->|bcrypt + JWT| L
-    D -->|token| B
+    B -->|credenciales| E -->|JWT| B
+    B -->|JWT + PDF| H
+    C -->|JWT| G & I & J & K
+    H & I --> U
+    K --> U
 
-    B -->|PDF + JWT| E
-    E --> F
+    E --> S
+    F --> S
+    H & I & J --> T
+    Q & R --> T
 ```
 
 ### Flujo de una consulta
@@ -149,7 +159,33 @@ sequenceDiagram
     F-->>U: { respuesta }
 ```
 
-La búsqueda usa **similitud coseno** con `DISTINCT ON` para evitar que un mismo documento aparezca repetido, y un umbral mínimo de similitud calibrado empíricamente para filtrar resultados irrelevantes sin descartar preguntas legítimas.
+### Flujo de indexación de un PDF
+
+```mermaid
+sequenceDiagram
+    participant A as Admin (GAS)
+    participant F as FastAPI
+    participant G as Gemini (segmentación)
+    participant E as Gemini (embeddings)
+    participant S as Supabase
+
+    A->>F: POST /documentos (PDF)
+    F->>F: Extraer texto + calcular hash SHA-256
+    F->>S: Verificar duplicado por hash
+    F->>S: Crear registro en documentos + trabajos_indexacion
+    F-->>A: 202 Accepted { documento_id, job_id }
+    Note over F: Pipeline corre en background
+    F->>G: Segmentación temática (===BLOQUE===)
+    G-->>F: N bloques temáticos
+    F->>E: Vectorizar hijos de cada bloque
+    E-->>F: embeddings (768d)
+    F->>S: Insertar chunks_padres + chunks_hijos
+    F->>S: Actualizar estado → indexado
+    A->>F: GET /indexar/estado/{job_id} (polling cada 5s)
+    F-->>A: { estado, progreso }
+```
+
+La búsqueda usa **similitud coseno** con `DISTINCT ON` para evitar que un mismo documento aparezca repetido, y un umbral mínimo de similitud calibrado empíricamente para filtrar resultados irrelevantes.
 
 ---
 
@@ -157,17 +193,18 @@ La búsqueda usa **similitud coseno** con `DISTINCT ON` para evitar que un mismo
 
 | Componente | Tecnología | Función |
 |---|---|---|
-| **Frontend** | Google Apps Script (HTML/CSS/JS) | Interfaz de chat y panel de administración, embebidos en el ecosistema institucional |
-| **Backend** | Python + FastAPI | Orquestación de la lógica RAG y autenticación |
-| **Modelo de IA** | Google Gemini (vía API) | Generación de respuestas en lenguaje natural |
+| **Frontend** | Google Apps Script (HTML/CSS/JS) | Interfaz de chat y panel de administración |
+| **Backend** | Python 3.11 + FastAPI | Orquestación de la lógica RAG, autenticación y endpoints de gestión |
+| **Modelo de lenguaje** | Google Gemini (vía API) | Generación de respuestas y segmentación temática de documentos |
 | **Embeddings** | Gemini Embeddings (768 dimensiones) | Vectorización de documentos y consultas |
-| **Base vectorial** | PostgreSQL + pgvector (Supabase) | Almacenamiento y búsqueda semántica |
-| **Autenticación** | JWT + bcrypt | Sesión de administradores para gestionar la base de conocimiento |
-| **Control de versiones** | Git + GitHub | Gestión del código fuente (GitHub Flow) |
-| **Gestión del proyecto** | Jira (tablero Kanban) | Organización en Épicas e historias de usuario |
-| **Hosting (planeado)** | Render (capa gratuita) | Despliegue del backend con keep-alive externo |
+| **Base vectorial** | PostgreSQL + pgvector (Supabase) | Almacenamiento y búsqueda semántica de chunks |
+| **Autenticación** | JWT + bcrypt + slowapi | Sesión de administradores con rate limiting en login |
+| **Hosting** | Render (free tier) | Despliegue del backend con keep-alive vía cron-job.org |
+| **Keep-alive** | cron-job.org | Ping periódico a `/ping` para evitar suspensión por inactividad |
+| **Control de versiones** | Git + GitHub (GitHub Flow) | Gestión del código fuente con feature branches |
+| **Gestión del proyecto** | Jira (Kanban, prefijo `CHTPUI-`) | Épicas, historias y seguimiento de tickets |
 
-> Todo el stack se apoya en capas gratuitas, siguiendo la misma filosofía de costo-cero del proyecto original.
+> Todo el stack opera sobre capas gratuitas, manteniendo costo de operación cero.
 
 ---
 
@@ -175,162 +212,276 @@ La búsqueda usa **similitud coseno** con `DISTINCT ON` para evitar que un mismo
 
 ```
 chatbot-pui/
-├── app.py                       # FastAPI — endpoints de la API
-├── auth.py                      # Login, hashing y verificación de JWT
-├── gemini_chat.py                # Prompt y llamada al modelo de lenguaje
-├── embedder.py                   # Generación de embeddings (768d)
+├── app.py                        # FastAPI — todos los endpoints
+├── auth.py                       # Login, bcrypt, JWT, rate limiting
+├── pipeline.py                   # Lógica de indexación (alta y actualización)
+├── gemini_chat.py                # System prompt y llamada al LLM
+├── embedder.py                   # Vectorización de textos (768d)
 ├── requirements.txt
 ├── keys.env                      # Variables de entorno (no versionado)
+├── generar_admin.py              # Script para crear el primer administrador
 │
 ├── database/
 │   ├── supabase_client.py        # Cliente de conexión a Supabase
-│   ├── retriever.py               # Búsqueda semántica (RPC buscar_chunks)
-│   └── insertar_supabase.py       # Inserción de chunks + embeddings
+│   ├── retriever.py              # Búsqueda semántica (RPC buscar_chunks)
+│   ├── insertar_supabase.py      # Inserción de chunks_padres + chunks_hijos
+│   ├── documentos_repo.py        # CRUD de la tabla documentos + hash SHA-256
+│   └── trabajos_repo.py          # CRUD de la tabla trabajos_indexacion
 │
-├── indexador/
-│   ├── extractor_pdf.py           # Extracción y limpieza de texto de PDFs
-│   ├── chunker.py                 # División padre-hijo del texto
-│   └── indexar_pdf.py             # Orquestación del pipeline de indexación
-│
-└── vista/                         # Prototipo local de la vista (referencia)
-    ├── index.html
-    ├── styles.css
-    └── script.js
+└── indexador/
+    ├── extractor_pdf.py          # Extracción y limpieza de texto de PDFs
+    ├── chunker.py                # División padre-hijo por bloques temáticos
+    ├── segmentador.py            # Segmentación temática con Gemini
+    └── indexar_pdf.py            # Script de indexación manual (local)
 ```
 
-> La versión desplegada de la vista vive dentro de **Google Apps Script** (no en este repositorio), como archivos `.html` independientes que consumen esta API.
+> La vista del chatbot y el panel de administración viven en **Google Apps Script** (repositorio separado), y consumen esta API.
+
+---
+
+## 🗄️ Esquema de base de datos
+
+```
+documentos
+├── id_documento      uuid PK
+├── nombre_archivo    text
+├── hash_contenido    text UNIQUE   ← SHA-256 del texto extraído (deduplicación)
+├── estado            text          ← pendiente | indexado | error
+├── fecha_carga       timestamptz
+└── version           int
+
+chunks_padres
+├── id_chunk_padre    bigserial PK
+├── contexto_completo text          ← bloque temático completo (contexto para el LLM)
+├── fuente            text          ← nombre del PDF de origen
+├── fecha_indexacion  date
+└── documento_id      uuid FK → documentos (ON DELETE CASCADE)
+
+chunks_hijos
+├── id_chunk_hijo     bigserial PK
+├── padre_id          bigint FK → chunks_padres (ON DELETE CASCADE)
+├── texto_embedding   text          ← oración o fragmento para búsqueda semántica
+└── embedding         vector(768)   ← vector pgvector
+
+administradores
+├── id_admin          uuid PK
+├── usuario           varchar(50) UNIQUE
+├── password_hash     varchar(255)  ← bcrypt, nunca texto plano
+└── created_at        timestamp
+
+trabajos_indexacion
+├── id_job            uuid PK
+├── documento_id      uuid FK → documentos (ON DELETE CASCADE)
+├── tipo              text          ← alta | actualizacion
+├── estado            text          ← en_proceso | completado | error
+├── progreso          text          ← mensaje de etapa actual (para polling)
+├── mensaje_error     text
+├── fecha_inicio      timestamptz
+└── fecha_fin         timestamptz
+```
+
+Las cascadas garantizan que borrar un documento limpia automáticamente sus chunks y trabajos asociados, sin queries adicionales desde la API.
 
 ---
 
 ## 🔌 Endpoints de la API
 
-| Método | Endpoint | Protegido | Descripción |
-|---|---|:---:|---|
-| `POST` | `/consulta` | No | Recibe una pregunta y devuelve la respuesta generada por RAG |
-| `POST` | `/login` | No* | Valida credenciales de administrador y devuelve un JWT |
-| `GET` | `/admin/verificar` | ✅ JWT | Verifica que una sesión de administrador es válida |
-| `POST` | `/indexar/iniciar` | 🚧 Planeado | Sube un PDF y dispara la indexación en segundo plano |
-| `GET` | `/indexar/estado/{job_id}` | 🚧 Planeado | Consulta el progreso de un trabajo de indexación |
-| `GET` | `/ping` | 🚧 Planeado | Endpoint de salud para el keep-alive del hosting gratuito |
+La documentación interactiva (Swagger UI) está disponible en [`/docs`](https://chatbot-pui-api.onrender.com/docs).
 
-`*` `/login` no requiere token, pero está protegido contra fuerza bruta con **rate limiting** (5 intentos cada 5 minutos por IP).
+### Públicos
 
-La documentación interactiva (Swagger UI) está disponible en `/docs` cuando el servidor corre localmente o en producción.
+| Método | Endpoint | Descripción |
+|---|---|---|
+| `POST` | `/consulta` | Recibe una pregunta y devuelve la respuesta generada por RAG |
+| `POST` | `/login` | Valida credenciales y devuelve un JWT (rate limit: 5 intentos / 5 min por IP) |
+| `GET` | `/ping` | Endpoint de salud para el keep-alive de Render |
+
+### Protegidos con JWT
+
+| Método | Endpoint | Descripción |
+|---|---|---|
+| `GET` | `/admin/verificar` | Verifica que la sesión activa es válida |
+| `PUT` | `/admin/password` | Cambia la contraseña del administrador autenticado |
+| `GET` | `/documentos` | Lista todos los documentos indexados |
+| `POST` | `/documentos` | Sube un PDF nuevo y dispara la indexación en background (202 + job_id) |
+| `PUT` | `/documentos/{id}` | Actualiza un documento existente con swap atómico (304 si contenido idéntico) |
+| `DELETE` | `/documentos/{id}` | Elimina un documento y todos sus chunks (cascada) |
+| `GET` | `/indexar/estado/{job_id}` | Consulta el progreso de un trabajo de indexación (para polling) |
 
 ---
 
 ## 🔐 Autenticación de administradores
 
-Los administradores (quienes pueden actualizar la base de conocimiento) se autentican mediante un flujo JWT:
+El flujo de autenticación sigue el estándar JWT con las siguientes garantías:
 
-1. Las contraseñas se almacenan **hasheadas con bcrypt** en la tabla `administradores` de Supabase — nunca en texto plano.
-2. `POST /login` valida las credenciales y, si son correctas, devuelve un token JWT firmado con expiración de 8 horas.
-3. Los endpoints protegidos exigen el header `Authorization: Bearer <token>`, validado por una dependencia de FastAPI (`obtener_admin_actual`).
-4. La tabla `administradores` **no está expuesta** a la API pública de Supabase (permisos revocados para el rol `anon`); solo el backend, usando la *secret key*, puede leerla.
+1. Las contraseñas se almacenan **hasheadas con bcrypt** en la tabla `administradores` — nunca en texto plano.
+2. `POST /login` valida las credenciales contra Supabase usando `bcrypt.checkpw` y, si son correctas, devuelve un JWT firmado con expiración de 8 horas.
+3. Todos los endpoints de administración exigen el header `Authorization: Bearer <token>`, validado por la dependencia `obtener_admin_actual` de FastAPI.
+4. El endpoint `/login` está protegido contra fuerza bruta con **rate limiting** de 5 intentos por IP cada 5 minutos vía `slowapi`.
+5. El cierre de sesión es **stateless**: se borra el token de `PropertiesService` en GAS. No hay endpoint de logout porque los JWT son por diseño irrevocables hasta su expiración.
+6. La tabla `administradores` no está expuesta a la API pública de Supabase — solo el backend con la secret key puede acceder a ella.
+
+---
+
+## ⚙️ Pipeline de indexación
+
+El pipeline transforma un PDF en datos buscables semánticamente en cuatro etapas:
+
+1. **Extracción** — `extractor_pdf.py` usa `pypdf` para extraer el texto de cada página y aplicar limpieza (eliminar artefactos de salto de línea, espacios redundantes, encabezados de página repetidos).
+
+2. **Segmentación temática** — `segmentador.py` envía el texto completo a Gemini con un prompt que instruye al modelo a dividir el documento en bloques temáticamente coherentes, separados por el marcador `===BLOQUE===`. Esto resuelve el problema de listas y procedimientos numerados, que con chunking mecánico por párrafo quedarían fragmentados perdiendo cohesión semántica.
+
+3. **Chunking padre-hijo** — `chunker.py` convierte cada bloque temático en un **padre** (el contexto completo que recibirá el LLM al responder) y sus oraciones individuales en **hijos** (los fragmentos vectorizados para la búsqueda semántica). Cuando un hijo tiene alta similitud con la consulta, se devuelve el padre completo como contexto — no solo la oración coincidente.
+
+4. **Embeddings e inserción** — `embedder.py` vectoriza todos los hijos en lotes respetando el rate limit de la API gratuita de Gemini (100 req/min), e `insertar_supabase.py` guarda padres e hijos en Supabase vinculados al registro de la tabla `documentos`.
+
+**Deduplicación por hash:** antes de iniciar el pipeline, se calcula el SHA-256 del texto extraído y limpio (no de los bytes crudos del PDF) y se compara contra los hashes existentes en `documentos`. Si coincide, el endpoint responde `409 Conflict` sin gastar cuota de la API de embeddings.
+
+**Ambiente de desarrollo separado:** existe un proyecto de Supabase de desarrollo independiente para probar cambios sin alterar los datos de producción.
 
 ---
 
 ## 💻 Puesta en marcha local
 
-**Requisitos:** Python 3.11+, una cuenta de Supabase y una API key de Google Gemini.
+**Requisitos:** Python 3.11+, cuenta de Supabase y API key de Google Gemini.
 
 ```bash
 # 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/chatbot-pui.git
+git clone https://github.com/Bastian1133/chatbot-pui.git
 cd chatbot-pui
 
 # 2. Instalar dependencias
 pip install -r requirements.txt
 
-# 3. Configurar variables de entorno (ver sección siguiente)
-cp keys.env.example keys.env
+# 3. Configurar variables de entorno
+# Crear keys.env con los valores indicados en la sección siguiente
 
-# 4. Levantar el servidor
+# 4. Levantar el servidor de desarrollo
 python -m uvicorn app:app --reload
 ```
 
-Con el servidor corriendo, abre `http://127.0.0.1:8000/docs` para probar todos los endpoints desde Swagger UI sin necesidad de ninguna vista.
+Con el servidor corriendo, abre `http://127.0.0.1:8000/docs` para probar todos los endpoints desde Swagger UI.
+
+### Indexación manual (primera carga o pruebas locales)
+
+```bash
+# Coloca los PDFs en la carpeta documentos/ y ejecuta:
+python indexador/indexar_pdf.py
+```
+
+### Crear el primer administrador
+
+```bash
+python generar_admin.py
+# Sigue las instrucciones e inserta el query resultante en Supabase
+```
 
 ---
 
 ## 🔑 Variables de entorno
 
-Crear un archivo `keys.env` en la raíz del proyecto con:
+Crear un archivo `keys.env` en la raíz del proyecto:
 
 ```env
+# Supabase
 SUPABASE_URL=https://tu-proyecto.supabase.co
 SUPABASE_KEY=tu_secret_key_de_supabase
 
+# Google Gemini
 GEMINI_API_KEY=tu_api_key_de_gemini
 
+# JWT — generar con: python -c "import secrets; print(secrets.token_hex(32))"
 JWT_SECRET=una_clave_larga_generada_aleatoriamente
 ```
 
-> `JWT_SECRET` se genera una sola vez con: `python -c "import secrets; print(secrets.token_hex(32))"`
+> En Render, estas variables se configuran directamente en el dashboard bajo **Environment** y nunca se versionan.
 
 ---
 
 ## 🚀 Despliegue
 
-**Estado actual:** en desarrollo local, pendiente de despliegue.
+**Estado actual:** desplegado en producción en Render.
 
-Arquitectura de despliegue planeada:
+**URL de producción:** `https://chatbot-pui-api.onrender.com`
+
+### Arquitectura de despliegue
 
 ```
-Google Apps Script (vista + botón de acceso)
+GAS (vista chatbot + panel admin)
+        │
+        ▼  HTTP/JSON
+Render — chatbot-pui-api (FastAPI, free tier)
         │
         ▼
-   Render (FastAPI + vista estática, un solo servicio)
-        │
-        ▼
-   Supabase (pgvector)
+Supabase — chatbot-pui (pgvector, free tier)
         ▲
         │
-cron-job.org — ping periódico a /ping para evitar
-la suspensión por inactividad de la capa gratuita
+cron-job.org — GET /ping cada 5 minutos
+(evita suspensión por inactividad de Render free tier)
 ```
 
-Todo el backend se aloja en un único servicio de Render para evitar CORS innecesario y mantener un solo dominio.
+### Ambientes
+
+| Ambiente | API | Base de datos |
+|---|---|---|
+| **Desarrollo** | `localhost:8000` | Proyecto Supabase de dev (datos de prueba) |
+| **Producción** | `chatbot-pui-api.onrender.com` | Proyecto Supabase de prod (datos reales) |
+
+### Pasos para nuevo despliegue
+
+```bash
+# Mergear feature branch a main
+git checkout main
+git merge --no-ff feature/mi-feature
+git push origin main
+# Render despliega automáticamente desde main
+```
 
 ---
 
 ## 🗺️ Roadmap
 
-- [x] Adaptar el proyecto base (chatbot UPIICSA) a un nuevo repositorio independiente
-- [x] Provisionar un nuevo proyecto de Supabase con las tablas del RAG + tabla de administradores
-- [x] Implementar autenticación de administradores (bcrypt + JWT + rate limiting)
-- [x] Construir la vista de chat y de login en Google Apps Script
-- [ ] Adaptar el dominio del asistente (system prompt, preguntas frecuentes reales de la PUI)
-- [ ] Implementar el endpoint de indexación con subida de PDF desde la vista (job asíncrono)
-- [ ] Construir el panel de administración post-login en GAS
-- [ ] Desplegar el backend en Render
-- [ ] Configurar keep-alive externo y restringir CORS a los dominios de producción
-- [ ] Conectar la vista de producción de GAS al chatbot desplegado
+- [x] Adaptar el proyecto base (chatbot UPIICSA) a repositorio independiente con mirror
+- [x] Provisionar proyecto de Supabase con tablas RAG, administradores y documentos
+- [x] Implementar autenticación JWT con bcrypt y rate limiting en login
+- [x] Implementar pipeline de indexación con segmentación temática vía Gemini
+- [x] Implementar endpoints CRUD de documentos con deduplicación por hash SHA-256
+- [x] Implementar indexación asíncrona con BackgroundTasks + polling de progreso persistido en BD
+- [x] Implementar endpoint de cambio de contraseña
+- [x] Desplegar backend en Render con keep-alive vía cron-job.org
+- [x] Construir vista de chatbot en Google Apps Script
+- [x] Construir vista de login de administrador en Google Apps Script
+- [x] Construir panel de administración en GAS (tabla de documentos, subida, borrado, actualización)
+- [x] Separar CSS y JS en archivos `Estilos.html` y `JavaScript.html` para reutilización entre vistas
+- [ ] Adaptar system prompt al dominio PUI (preguntas frecuentes reales)
+- [ ] Actualizar preguntas frecuentes en la sidebar del chatbot con contenido real de la PUI
+- [ ] Restringir CORS a los dominios de producción de GAS
+- [ ] Conectar el GAS de producción (DGAIR-SIGED) a la API desplegada
 
 ---
 
 ## 📸 Capturas y pruebas
 
-> *Sección pendiente de completar una vez desplegado el proyecto en Google Apps Script.*
+> *Sección pendiente — se completará con capturas del sistema en producción integrado al GAS de la DGAIR.*
 
 <!--
 Agregar aquí:
-- Captura de la vista principal con el botón de acceso al chatbot
-- Captura de una conversación real con el chatbot
+- Captura de la vista principal del chatbot con el botón de acceso
+- Captura de una conversación real con el chatbot respondiendo preguntas de la PUI
 - Captura del panel de login de administrador
-- Captura del panel de administración (subida e indexación de PDFs)
-- Protocolo de pruebas: preguntas reales utilizadas y evaluación de las respuestas
+- Captura del panel de administración (tabla de documentos, modal de progreso)
+- Captura del modal de cambio de contraseña
+- Protocolo de pruebas: preguntas reales utilizadas y evaluación de respuestas
 -->
 
 ---
 
 ## 🎓 Origen del proyecto
 
-Este proyecto es una adaptación del **Chatbot de Apoyo para el Servicio Social en UPIICSA**, desarrollado originalmente como Trabajo Terminal del Instituto Politécnico Nacional por Josgua Tadeo Choreño Arenas, Gael Dali Cruz Cordero y Sebastián García Martínez, bajo la asesoría de la Dra. Lilia González Arroyo. Conserva la arquitectura RAG original y la adapta a un nuevo dominio de información (la Plataforma Única de Identidad) y a un nuevo entorno de despliegue (Google Apps Script).
+Este proyecto es una adaptación del **Chatbot de Apoyo para el Servicio Social en UPIICSA**, desarrollado originalmente como Trabajo Terminal del Instituto Politécnico Nacional por Joshua Tadeo Choreño Arenas, Gael Dali Cruz Cordero y Sebastián García Martínez, bajo la asesoría de la Dra. Lilia González Arroyo. Conserva la arquitectura RAG original y la adapta a un nuevo dominio de información (la Plataforma Única de Identidad) y a un nuevo entorno de despliegue (Google Apps Script + Render).
 
 ---
 
 ## 📄 Licencia
 
 > *Pendiente de definir.*
-
