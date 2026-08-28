@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 import os
+import json
 # Configuracion LLM - Gemini
+from google.oauth2 import service_account
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -9,7 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 class GeminiChat:
     def __init__(self):
         load_dotenv("keys.env") # Carga las variables de entorno desde el archivo keys.env
-
+        
         GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # Obtiene la clave de API de Gemini desde las variables de entorno
         
         if not GEMINI_API_KEY:
@@ -46,11 +48,11 @@ class GeminiChat:
         Si el texto de referencia no tiene la información necesaria para responder,
         di que no tienes suficiente información para responder e invita al usuario 
         a reformular su pregunta, proporcionar más detalles, o consultar el canal 
-        de contacto correspondiente (comunicacionpui@nube.sep.gob.mx).
+        de contacto correspondiente (comunicacionpui@nube.sep.gob.mx), es obligatorio
+        que solicites amablemente al usuario que mande la pregunta que no pudo ser 
+        respondida a dicho correo.
         No menciones el texto de referencia en ninguna de tus respuestas, ni digas que la información proviene de él.
-
-        """ 
-        #"Responde en texto plano sin Markdown." habilitar solo en depuracion en consola
+        """
 
     def consultar_llm(self, consulta, mejor_pasaje):
         prompt = ChatPromptTemplate.from_messages([

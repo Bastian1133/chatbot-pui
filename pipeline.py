@@ -89,8 +89,8 @@ def pipeline_alta(documento_id: str, job_id: str, nombre_archivo: str, texto: st
     except Exception as e:
         # Rollback: borrar el documento (cascada limpia cualquier chunk
         # que se haya alcanzado a insertar antes del fallo)
-        docs_repo.eliminar_documento(documento_id)
-        trabajos_repo.marcar_error(job_id, str(e))
+        trabajos_repo.marcar_error(job_id, str(e)) 
+        docs_repo.eliminar_documento(documento_id)  # ← Luego, cascade limpia chunks padres e hijos
 
 
 def pipeline_actualizacion(documento_id: str, job_id: str, nombre_archivo: str,
