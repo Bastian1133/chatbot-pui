@@ -376,28 +376,6 @@ python generar_admin.py
 # Sigue las instrucciones e inserta el query resultante en Supabase
 ```
 
----
-
-## 🔑 Variables de entorno
-
-Crear un archivo `keys.env` en la raíz del proyecto:
-
-```env
-# Supabase
-SUPABASE_URL=https://tu-proyecto.supabase.co
-SUPABASE_KEY=tu_secret_key_de_supabase
-
-# Google Gemini
-GEMINI_API_KEY=tu_api_key_de_gemini
-
-# JWT — generar con: python -c "import secrets; print(secrets.token_hex(32))"
-JWT_SECRET=una_clave_larga_generada_aleatoriamente
-```
-
-> En Render, estas variables se configuran directamente en el dashboard bajo **Environment** y nunca se versionan.
-
----
-
 ## 🚀 Despliegue
 
 **Estado actual:** desplegado en producción en Render.

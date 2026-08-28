@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI
+from typing import Optional
 from pydantic import BaseModel
 from gemini_chat import GeminiChat
 from database.retriever import Retriever
@@ -65,7 +66,7 @@ class AltaResponse(BaseModel):
  
 class EstadoJobResponse(BaseModel):
     job_id: str
-    documento_id: str
+    documento_id: Optional[str] = None
     tipo: str
     estado: str
     progreso: str | None = None
