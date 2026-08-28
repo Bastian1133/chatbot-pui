@@ -1,8 +1,6 @@
 import os
-import json
 from pathlib import Path
 from dotenv import load_dotenv
-from google.oauth2 import service_account
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 load_dotenv(Path(__file__).parent.parent / "keys.env")
@@ -52,32 +50,15 @@ DOCUMENTO:
 class Segmentador:
 
     def __init__(self):
-
-        # Decodificar las credenciales desde la variable de entorno
-        service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
-        if not service_account_info:
-            raise ValueError("Falta GOOGLE_SERVICE_ACCOUNT_JSON en el archivo keys.env")
-
-        # Asignar el scope de Cloud Platform
-        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
-
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_info, 
-            scopes=scopes  # <--- Asigna los permisos OAuth requeridos
-        )
-
-        project_id = os.getenv("PROJECT_ID")
-        if not project_id:
-            raise ValueError("Falta PROJECT_ID en el archivo keys.env")
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("Falta GEMINI_API_KEY en el archivo keys.env")
 
         self.modelo = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite",
-            vertexai=True,
-            project=os.getenv("PROJECT_ID"),
+            model="gemini-3.1-flash-lite-preview",
             temperature=0,  # consistencia, no creatividad, para esta tarea
-            credentials=credentials,
-            location="global",
-            max_tokens=8192
+            max_tokens=8192,
+            google_api_key=api_key,
         )
 
     def segmentar(self, texto: str) -> list:
