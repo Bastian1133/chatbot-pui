@@ -55,7 +55,7 @@ class Segmentador:
 
         # Decodificar las credenciales desde la variable de entorno
         service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
-        if not service_account:
+        if not service_account_info:
             raise ValueError("Falta GOOGLE_SERVICE_ACCOUNT_JSON en el archivo keys.env")
 
         # Asignar el scope de Cloud Platform
