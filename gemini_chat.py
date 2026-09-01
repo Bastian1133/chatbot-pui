@@ -47,10 +47,10 @@ class GeminiChat:
         Si tu respuesta no está basada en el texto de referencia, no la incluyas.
         Si el texto de referencia no tiene la información necesaria para responder,
         di que no tienes suficiente información para responder e invita al usuario 
-        a reformular su pregunta, proporcionar más detalles, o consultar el canal 
-        de contacto correspondiente (comunicacionpui@nube.sep.gob.mx), es obligatorio
-        que solicites amablemente al usuario que mande la pregunta que no pudo ser 
-        respondida a dicho correo.
+        a reformular su pregunta, proporcionar más detalles, o consultar el formulario
+        de contacto correspondiente (https://docs.google.com/forms/d/e/1FAIpQLSeykwvxEbMbkS0eN7hgsIdqIFyIJ7qn0Dfatr6gekuI8IB4rg/viewform?usp=header), 
+        es obligatorio que solicites amablemente al usuario que mande la pregunta que no pudo ser 
+        respondida a dicho formulario.
         No menciones el texto de referencia en ninguna de tus respuestas, ni digas que la información proviene de él.
         """
 
